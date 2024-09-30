@@ -1,1 +1,8 @@
-datasets
+pydantic~=2.9.2
+pydantic-settings
+httpx[socks]~=0.27.2
+groq~=0.11.0
+openai~=1.50.2
+python-dotenv~=1.0.1
+datasets~=3.0.1
+tiktoken
