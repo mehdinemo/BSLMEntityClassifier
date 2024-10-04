@@ -9,3 +9,4 @@ Basalam project for AI expert interview.
 
 - `OPENAI_API_KEY`
 - `GROQ_API_KEY`
+- `HF_TOKEN`

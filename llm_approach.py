@@ -7,7 +7,7 @@ from groq import Groq
 from openai import OpenAI
 from pydantic import BaseModel
 
-from utils import logger_function
+from utils import logger_function, create_test_ds
 
 logger = logger_function(name="investigate_approaches")
 
@@ -84,6 +84,10 @@ def zero_shot(user_content: str):
     return product.entity, usage
 
 
+def few_shot():
+    raise NotImplemented
+
+
 def add_user_content(products):
     """
     اضافه کردن پیام کاربر با فرمت YAML به دیتاست برای کوئری به LLM
@@ -92,19 +96,6 @@ def add_user_content(products):
 
     products["user_content"] = f"Product:\n- title: {products['title']}\n- description: {products['description']}"
     return products
-
-
-def create_test_ds():
-    """
-    ساخت دیتاست تست با تعداد کم برای تست LLM ها
-    مهمه که مدل ها روی یک دیتاست یکسان تست بشن تا پارامترهای مختلفشون رو مقایسه کنیم.
-    چون در توسعه کد ممکنه مدل های مختلف تست بشن و شرایط مختلفی تاثیر گذاره ترجیحا این دیتاست تست رو روی دیسک ذخیره میکنیم.
-    """
-
-    dataset = datasets.load_dataset('BaSalam/bslm-product-entity-cls-610k')
-    dataset = dataset["train"].train_test_split(test_size=20, shuffle=True)
-    # ds["train"] = ds["train"].map(add_user_content, batched=True, batch_size=100)
-    return dataset['test'].to_list()
 
 
 def main():
