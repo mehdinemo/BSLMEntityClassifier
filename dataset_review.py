@@ -1,6 +1,6 @@
 import datasets
 
-dataset = datasets.load_dataset('BaSalam/bslm-product-entity-cls-610k')
+dataset = datasets.load_dataset('BaSalam/bslm-product-entity-cls-610k', split='train')
 
 print(dataset)
 # > DatasetDict({
