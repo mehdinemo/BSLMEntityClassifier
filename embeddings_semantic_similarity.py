@@ -1,3 +1,4 @@
+import json
 import os
 import shutil
 from collections import Counter
@@ -10,36 +11,18 @@ import torch
 from langchain_chroma import Chroma
 from langchain_community.embeddings import HuggingFaceInferenceAPIEmbeddings
 from langchain_huggingface.embeddings import HuggingFaceEmbeddings
-from sklearn.cluster import DBSCAN
+from sklearn.cluster import spectral_clustering
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, classification_report
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.model_selection import train_test_split
 from tqdm import tqdm
 
-from TextTools import normalize_texts
-from constants import EMBEDDING_MODEL_NAME, CHROMA_PERSIST_DIRECTORY
+from constants import EMBEDDING_MODEL_NAME, CHROMA_PERSIST_DIRECTORY, PATH_OR_NAME_OF_THE_DATASET
+from text_tools import remove_stop_words
 from utils import logger_function
 
-logger = logger_function(name="investigate_approaches")
-
-
-def similarity(embeddings, texts, threshold=0.8):
-    cosine_sim_matrix = cosine_similarity(embeddings)
-    most_similar_pairs = np.argwhere(cosine_sim_matrix > threshold)  # Threshold for similarity
-
-    # Apply DBSCAN clustering on the embeddings
-    clustering_model = DBSCAN(metric='cosine', eps=0.5, min_samples=2)
-    clusters = clustering_model.fit_predict(embeddings)
-
-    # Print the cluster assignments
-    for i, cluster in enumerate(clusters):
-        print(f"Product {i} belongs to cluster {cluster}")
-
-    # Extract most common entities within each cluster
-    for cluster_id in set(clusters):
-        cluster_items = [texts[i] for i in range(len(clusters)) if clusters[i] == cluster_id]
-        print(f"Cluster {cluster_id}: {Counter(' '.join(cluster_items).split()).most_common(5)}")
+logger = logger_function(name="embeddings_semantic_similarity")
 
 
 class Embeddings:
@@ -111,8 +94,11 @@ class Embeddings:
         """
 
         if not reset_cache and len(os.listdir(persist_directory)) > 0:
-            self.logger.info(f'Already exists in: {persist_directory}')
-            return
+            self.logger.info(f"Already exists in '{persist_directory}'")
+            return Chroma(
+                persist_directory=persist_directory,
+                embedding_function=self.model
+            )
 
         if reset_cache:
             self.logger.warning('Delete all files in the persist_directory')
@@ -146,65 +132,77 @@ class Embeddings:
         return vs
 
 
-def add_normalized_title(titles, entities):
+def add_normalized_title(titles, entities, normalize_fn):
     return {
-        "normalized_title": normalize_texts(titles),
-        "normalized_entity": normalize_texts(entities)
+        "title": normalize_fn(titles),
+        "entity": normalize_fn(entities)
     }
 
 
 def normalize_titles_and_entities():
-    dataset = datasets.load_dataset('BaSalam/bslm-product-entity-cls-610k', split="train")
+    try:
+        from TextTools import normalize_texts
+    except:
+        logger.exception('Could not import TextTools')
+        return
+
+    dataset = datasets.load_dataset(PATH_OR_NAME_OF_THE_DATASET, split="train")
     dataset = dataset.map(
         add_normalized_title,
         input_columns=['title', 'entity'],
         remove_columns=['title', 'description', 'entity'],
         batched=True,
-        batch_size=1000
+        batch_size=1000,
+        fn_kwargs={"normalize_fn": normalize_texts}
     )
+
     dataset.save_to_disk(dataset_path='dataset/normalized')
 
 
 def embedd_titles_and_entities():
-    dataset = datasets.load_from_disk(dataset_path='dataset/normalized')
+    try:
+        dataset = datasets.load_from_disk(dataset_path='dataset/normalized')
+    except:
+        logger.warning('Could not load normalized dataset. using original dataset.')
+        dataset = datasets.load_dataset(PATH_OR_NAME_OF_THE_DATASET, split="train")
+
     dataset = dataset.to_dict()
 
-    embeddings = Embeddings(
-        model_id=EMBEDDING_MODEL_NAME,
-        method="local"
-    )
+    embeddings = Embeddings(model_id=EMBEDDING_MODEL_NAME, method="local")
 
     titles_persist_directory = os.path.join(CHROMA_PERSIST_DIRECTORY, 'titles')
     Path(titles_persist_directory).mkdir(parents=True, exist_ok=True)
     embeddings.creating_local_vectorstore(
-        texts=dataset.get('normalized_title'),
+        texts=dataset.get('title'),
         persist_directory=titles_persist_directory,
-        reset_cache=True,
+        reset_cache=False,
         batch_size=1000
     )
 
     entities_persist_directory = os.path.join(CHROMA_PERSIST_DIRECTORY, 'entities')
     Path(entities_persist_directory).mkdir(parents=True, exist_ok=True)
     embeddings.creating_local_vectorstore(
-        texts=dataset.get('normalized_entity'),
+        texts=dataset.get('entity'),
         persist_directory=entities_persist_directory,
-        reset_cache=True,
+        reset_cache=False,
         batch_size=1000
     )
 
 
-def main():
-    embeddings = Embeddings(
-        model_id=EMBEDDING_MODEL_NAME,
-        method="local"
-    )
+def classification():
+    """
+    *********** Not completed ***********
+    """
+
+    embeddings = Embeddings(model_id=EMBEDDING_MODEL_NAME, method="local")
 
     titles_persist_directory = os.path.join(CHROMA_PERSIST_DIRECTORY, 'titles')
     x_vectorstore = Chroma(
         persist_directory=titles_persist_directory,
         embedding_function=embeddings.model
     )
-    entities_persist_directory = os.path.join(CHROMA_PERSIST_DIRECTORY, 'titles')
+
+    entities_persist_directory = os.path.join(CHROMA_PERSIST_DIRECTORY, 'entities')
     y_vectorstore = Chroma(
         persist_directory=entities_persist_directory,
         embedding_function=embeddings.model
@@ -235,6 +233,62 @@ def main():
     print(classification_report(y_test, y_pred))
 
 
+def clustering(n_samples=10000):
+    """
+    Cluster embeddings using spectral clustering.
+    :param n_samples: Number of first samples to use for clustering
+    :return: Array of clusters
+    """
+
+    embeddings = Embeddings(model_id=EMBEDDING_MODEL_NAME, method="local")
+
+    titles_persist_directory = os.path.join(CHROMA_PERSIST_DIRECTORY, 'titles')
+    titles_vectorstore = Chroma(
+        persist_directory=titles_persist_directory,
+        embedding_function=embeddings.model
+    )
+
+    titles_vectors = titles_vectorstore.get(limit=n_samples, include=['embeddings']).get('embeddings')
+
+    cosine_sim_matrix = cosine_similarity(titles_vectors)
+    labels = spectral_clustering(cosine_sim_matrix, n_clusters=int(n_samples / 10), eigen_solver="arpack")
+
+    return labels
+
+
+def entity_extraction(n_samples=10000):
+    try:
+        dataset = datasets.load_from_disk(dataset_path='dataset/normalized')
+    except:
+        logger.warning('Could not load normalized dataset. Using original dataset.')
+        dataset = datasets.load_dataset(PATH_OR_NAME_OF_THE_DATASET, split="train")
+
+    dataset = dataset.to_dict()
+    texts = dataset.get('title')
+    texts = texts[:n_samples]
+
+    labels_path = 'spectral_labels.npy'
+    if os.path.isfile(labels_path):
+        logger.info("Loading labels from disk.")
+        labels = np.load(labels_path)
+    else:
+        logger.info("Starting Spectral Clustering. This take a while...")
+        labels = clustering(n_samples)
+        np.save(labels_path, labels)
+        logger.info("Labels saved to disk.")
+
+    # Extract most common entities within each cluster
+    clusters_entities = []
+    for cluster_id in set(labels):
+        cluster_items = [remove_stop_words(texts[i]) for i in range(len(labels)) if labels[i] == cluster_id]
+        common_elements = Counter(' '.join(cluster_items).split()).most_common(4)
+        clusters_entities.append([element[0] for element in common_elements])
+
+    with open('spectral_extracted_entities.json', 'w') as f:
+        json.dump(clusters_entities, f, ensure_ascii=False, indent=2)
+
+
 if __name__ == '__main__':
-    # embedd_titles_and_entities()
-    main()
+    # normalize_titles_and_entities()
+    embedd_titles_and_entities()
+    entity_extraction()

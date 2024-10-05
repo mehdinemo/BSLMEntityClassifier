@@ -9,7 +9,7 @@ from pydantic import BaseModel
 
 from utils import logger_function
 
-logger = logger_function(name="investigate_approaches")
+logger = logger_function(name="llm_approach")
 
 model = "llama-3.2-11b-text-preview"  # gpt-4o-mini | llama-3.2-11b-text-preview
 test_dataset_path = "test_ds.json"
