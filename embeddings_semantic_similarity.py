@@ -18,7 +18,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.model_selection import train_test_split
 from tqdm import tqdm
 
-from constants import EMBEDDING_MODEL_NAME, CHROMA_PERSIST_DIRECTORY, PATH_OR_NAME_OF_THE_DATASET
+from constants import EMBEDDING_MODEL, CHROMA_DIRECTORY, DATASET_PATH
 from text_tools import remove_stop_words
 from utils import logger_function
 
@@ -26,7 +26,7 @@ logger = logger_function(name="embeddings_semantic_similarity")
 
 
 class Embeddings:
-    logger = logger_function('EmbeddingsVS')
+    _logger = logger_function('EmbeddingsVS')
 
     def __init__(
             self,
@@ -39,7 +39,7 @@ class Embeddings:
         self.model = self._get_embedding_model(model_id, cache_folder, method, device, normalize_embeddings)
 
     def _get_embedding_model(self, model_id, cache_folder, method, device, normalize_embeddings):
-        self.logger.info(f"Initialization embedding model...")
+        self._logger.info(f"Initialization embedding model...")
         if method == "hf_hub":
             hf_token = os.getenv("HF_TOKEN")
             if hf_token is None:
@@ -53,10 +53,10 @@ class Embeddings:
         if device is None:
             device = "cuda" if torch.cuda.is_available() else "cpu"
         elif device == "cuda" and not torch.cuda.is_available():
-            self.logger.warning("No GPU found, using cpu.")
+            self._logger.warning("No GPU found, using cpu.")
             device = "cpu"
 
-        self.logger.info(f"Using {device}")
+        self._logger.info(f"Using {device}")
 
         model_kwargs = {'device': device}
         encode_kwargs = {'normalize_embeddings': normalize_embeddings}
@@ -94,14 +94,14 @@ class Embeddings:
         """
 
         if not reset_cache and len(os.listdir(persist_directory)) > 0:
-            self.logger.info(f"Already exists in '{persist_directory}'")
+            self._logger.info(f"Already exists in '{persist_directory}'")
             return Chroma(
                 persist_directory=persist_directory,
                 embedding_function=self.model
             )
 
         if reset_cache:
-            self.logger.warning('Delete all files in the persist_directory')
+            self._logger.warning('Delete all files in the persist_directory')
             for filename in os.listdir(persist_directory):
                 file_path = os.path.join(persist_directory, filename)
                 try:
@@ -112,7 +112,7 @@ class Embeddings:
                 except Exception as e:
                     print(f"Failed to delete {file_path}. Reason: {e}")
 
-        self.logger.info('Creating vectorstore...')
+        self._logger.info('Creating vectorstore...')
         if batch_size:
             vs = Chroma.from_texts(
                 texts=texts[:batch_size],
@@ -127,7 +127,7 @@ class Embeddings:
                 embedding=self.model,
                 persist_directory=persist_directory
             )
-        self.logger.info(f'Chroma vectorstore created in: {persist_directory}')
+        self._logger.info(f'Chroma vectorstore created in: {persist_directory}')
 
         return vs
 
@@ -146,7 +146,7 @@ def normalize_titles_and_entities():
         logger.exception('Could not import TextTools')
         return
 
-    dataset = datasets.load_dataset(PATH_OR_NAME_OF_THE_DATASET, split="train")
+    dataset = datasets.load_dataset(DATASET_PATH, split="train")
     dataset = dataset.map(
         add_normalized_title,
         input_columns=['title', 'entity'],
@@ -159,34 +159,29 @@ def normalize_titles_and_entities():
     dataset.save_to_disk(dataset_path='dataset/normalized')
 
 
-def embedd_titles_and_entities():
+def embedd_titles_and_entities(columns: List[str] = None):
+    if columns is None:
+        columns = ['title', 'entity']
+
     try:
         dataset = datasets.load_from_disk(dataset_path='dataset/normalized')
     except:
         logger.warning('Could not load normalized dataset. using original dataset.')
-        dataset = datasets.load_dataset(PATH_OR_NAME_OF_THE_DATASET, split="train")
+        dataset = datasets.load_dataset(DATASET_PATH, split="train")
 
     dataset = dataset.to_dict()
 
-    embeddings = Embeddings(model_id=EMBEDDING_MODEL_NAME, method="local")
+    embeddings = Embeddings(model_id=EMBEDDING_MODEL, method="local")
 
-    titles_persist_directory = os.path.join(CHROMA_PERSIST_DIRECTORY, 'titles')
-    Path(titles_persist_directory).mkdir(parents=True, exist_ok=True)
-    embeddings.creating_local_vectorstore(
-        texts=dataset.get('title'),
-        persist_directory=titles_persist_directory,
-        reset_cache=False,
-        batch_size=1000
-    )
-
-    entities_persist_directory = os.path.join(CHROMA_PERSIST_DIRECTORY, 'entities')
-    Path(entities_persist_directory).mkdir(parents=True, exist_ok=True)
-    embeddings.creating_local_vectorstore(
-        texts=dataset.get('entity'),
-        persist_directory=entities_persist_directory,
-        reset_cache=False,
-        batch_size=1000
-    )
+    for column in columns:
+        persist_directory = os.path.join(CHROMA_DIRECTORY, column)
+        Path(persist_directory).mkdir(parents=True, exist_ok=True)
+        embeddings.creating_local_vectorstore(
+            texts=dataset.get('title'),
+            persist_directory=persist_directory,
+            reset_cache=False,
+            batch_size=1000
+        )
 
 
 def classification():
@@ -194,15 +189,15 @@ def classification():
     *********** Not completed ***********
     """
 
-    embeddings = Embeddings(model_id=EMBEDDING_MODEL_NAME, method="local")
+    embeddings = Embeddings(model_id=EMBEDDING_MODEL, method="local")
 
-    titles_persist_directory = os.path.join(CHROMA_PERSIST_DIRECTORY, 'titles')
+    titles_persist_directory = os.path.join(CHROMA_DIRECTORY, 'titles')
     x_vectorstore = Chroma(
         persist_directory=titles_persist_directory,
         embedding_function=embeddings.model
     )
 
-    entities_persist_directory = os.path.join(CHROMA_PERSIST_DIRECTORY, 'entities')
+    entities_persist_directory = os.path.join(CHROMA_DIRECTORY, 'entities')
     y_vectorstore = Chroma(
         persist_directory=entities_persist_directory,
         embedding_function=embeddings.model
@@ -233,16 +228,16 @@ def classification():
     print(classification_report(y_test, y_pred))
 
 
-def clustering(n_samples=10000):
+def clustering(n_samples: int = None):
     """
     Cluster embeddings using spectral clustering.
     :param n_samples: Number of first samples to use for clustering
     :return: Array of clusters
     """
 
-    embeddings = Embeddings(model_id=EMBEDDING_MODEL_NAME, method="local")
+    embeddings = Embeddings(model_id=EMBEDDING_MODEL, method="local")
 
-    titles_persist_directory = os.path.join(CHROMA_PERSIST_DIRECTORY, 'titles')
+    titles_persist_directory = os.path.join(CHROMA_DIRECTORY, 'titles')
     titles_vectorstore = Chroma(
         persist_directory=titles_persist_directory,
         embedding_function=embeddings.model
@@ -256,12 +251,12 @@ def clustering(n_samples=10000):
     return labels
 
 
-def entity_extraction(n_samples=10000):
+def entity_extraction(n_samples: int = None):
     try:
         dataset = datasets.load_from_disk(dataset_path='dataset/normalized')
     except:
         logger.warning('Could not load normalized dataset. Using original dataset.')
-        dataset = datasets.load_dataset(PATH_OR_NAME_OF_THE_DATASET, split="train")
+        dataset = datasets.load_dataset(DATASET_PATH, split="train")
 
     dataset = dataset.to_dict()
     texts = dataset.get('title')
@@ -290,5 +285,5 @@ def entity_extraction(n_samples=10000):
 
 if __name__ == '__main__':
     # normalize_titles_and_entities()
-    embedd_titles_and_entities()
-    entity_extraction()
+    embedd_titles_and_entities(columns=['title'])
+    entity_extraction(n_samples=None)
