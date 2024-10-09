@@ -1,9 +1,10 @@
 import os
 
+import dotenv
 import evaluate
 import numpy as np
 import torch
-from datasets import DatasetDict
+from datasets import DatasetDict, load_dataset
 from transformers import (
     AutoTokenizer,
     AutoModelForSeq2SeqLM,
@@ -12,7 +13,7 @@ from transformers import (
     DataCollatorForSeq2Seq
 )
 
-from utils import load_split_dataset
+dotenv.load_dotenv()
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f'Using device: {device}')
@@ -22,14 +23,28 @@ hf_token = os.getenv('HF_TOKEN')
 if not hf_token:
     raise ValueError("'HF_TOKEN' environment variable not defined.")
 
+include_description = False
 hf_username = "MittyN"
 model_name = "google/mt5-base"
 train_size = 500000
 val_size = 50000
 test_size = 50000
 
-fine_tuned_model = f"bslm-entity-extraction-{model_name.split('/')[1]}-tr{train_size}"
+fine_tuned_model = f"bslm-entity-extraction-{'include-desc' if include_description else 'exclude-desc'}-{model_name.split('/')[1]}-tr{train_size}"
 repo_name = f"{hf_username}/{fine_tuned_model}"
+
+
+def load_split_dataset(train_size=50000, val_size=5000, test_size=1000):
+    """
+    :return: train, validation and test datasets
+    """
+
+    dataset = load_dataset("BaSalam/bslm-product-entity-cls-610k", split='train')
+    dataset = dataset.train_test_split(train_size=train_size, test_size=val_size + test_size, shuffle=True)
+    test_val_ds = dataset['test'].train_test_split(test_size=test_size, shuffle=True)
+
+    return dataset["train"], test_val_ds["train"], test_val_ds["test"]
+
 
 # Split the dataset into train and validation sets
 train_dataset, validation_dataset, test_dataset = load_split_dataset(
@@ -44,11 +59,17 @@ model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
 
 
 # Tokenization function
-def tokenize_function(examples):
-    inputs = [f"title: {title} description: {desc or ''}" for title, desc in
-              zip(examples['title'], examples['description'])]
+def tokenize_function(examples, include_desc=True):
+    if include_desc:
+        inputs = [
+            f"title: {title} description: {desc or ''}"
+            for title, desc in zip(examples['title'], examples['description'])
+        ]
+    else:
+        inputs = examples['title']
+
     targets = examples['entity']
-    model_inputs = tokenizer(inputs, max_length=512, truncation=True, padding="max_length")
+    model_inputs = tokenizer(inputs, max_length=128, truncation=True, padding="max_length")
 
     with tokenizer.as_target_tokenizer():
         labels = tokenizer(targets, max_length=128, truncation=True, padding="max_length")
@@ -58,8 +79,18 @@ def tokenize_function(examples):
 
 
 # Tokenize datasets
-tokenized_train = train_dataset.map(tokenize_function, batched=True, remove_columns=train_dataset.column_names)
-tokenized_val = validation_dataset.map(tokenize_function, batched=True, remove_columns=validation_dataset.column_names)
+tokenized_train = train_dataset.map(
+    tokenize_function,
+    batched=True,
+    remove_columns=train_dataset.column_names,
+    fn_kwargs={"include_desc": include_description}
+)
+tokenized_val = validation_dataset.map(
+    tokenize_function,
+    batched=True,
+    remove_columns=validation_dataset.column_names,
+    fn_kwargs={"include_desc": include_description}
+)
 
 # Data collator
 data_collator = DataCollatorForSeq2Seq(tokenizer, model=model)

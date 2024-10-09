@@ -1,10 +1,13 @@
 import os
 
+import dotenv
 import torch
 from datasets import load_dataset
 from tqdm.auto import tqdm
 from transformers import pipeline
 from transformers.pipelines.pt_utils import KeyDataset
+
+dotenv.load_dotenv()
 
 # Set your Hugging Face token
 hf_token = os.getenv('HF_TOKEN')
@@ -14,11 +17,12 @@ if not hf_token:
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f'Using device: {device}')
 
+include_description = False
 hf_username = "MittyN"
 model_name = "google/mt5-base"
 train_size = 500000
 
-fine_tuned_model = f"bslm-entity-extraction-{model_name.split('/')[1]}-tr{train_size}"
+fine_tuned_model = f"bslm-entity-extraction-{'include-desc' if include_description else 'exclude-desc'}-{model_name.split('/')[1]}-tr{train_size}"
 repo_name = f"{hf_username}/{fine_tuned_model}"
 
 
