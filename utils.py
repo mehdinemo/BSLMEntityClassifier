@@ -1,6 +1,9 @@
 import logging
 
 import tiktoken
+from datasets import load_dataset
+
+from constants import DATASET_PATH
 
 models = [
     "gpt-3.5-turbo-0613",
@@ -83,3 +86,15 @@ def num_tokens_from_messages(messages, model="gpt-3.5-turbo-0613"):
                 num_tokens += tokens_per_name
     num_tokens += 3  # every reply is primed with <|start|>assistant<|message|>
     return num_tokens
+
+
+def load_split_dataset(train_size=50000, val_size=5000, test_size=1000):
+    """
+    :return: train, validation and test datasets
+    """
+
+    dataset = load_dataset(DATASET_PATH, split='train')
+    dataset = dataset.train_test_split(train_size=train_size, test_size=val_size + test_size, shuffle=True)
+    test_val_ds = dataset['test'].train_test_split(test_size=test_size, shuffle=True)
+
+    return dataset["train"], test_val_ds["train"], test_val_ds["test"]
